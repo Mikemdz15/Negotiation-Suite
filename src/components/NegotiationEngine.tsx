@@ -2,17 +2,45 @@
 
 import React, { useState } from 'react';
 import styles from './NegotiationEngine.module.css';
+import { useCompany } from '@/context/CompanyContext';
 
 export default function NegotiationEngine() {
+  const { selectedCompanyId } = useCompany();
   const [proveedor, setProveedor] = useState('');
   const [macroContexto, setMacroContexto] = useState('');
   const [loading, setLoading] = useState(false);
   const [estrategia, setEstrategia] = useState('');
   const [error, setError] = useState('');
 
+  const [availableSkus, setAvailableSkus] = useState<{sku: string, desc: string}[]>([]);
+  const [selectedSkus, setSelectedSkus] = useState<string[]>([]);
+  const [loadingSkus, setLoadingSkus] = useState(false);
+
+  const fetchSkus = async () => {
+    if (!proveedor || !selectedCompanyId) return;
+    setLoadingSkus(true);
+    setAvailableSkus([]);
+    setSelectedSkus([]);
+    try {
+      const res = await fetch(`/api/proveedor-skus?proveedor=${encodeURIComponent(proveedor)}&empresaId=${selectedCompanyId}`);
+      const data = await res.json();
+      setAvailableSkus(data.skus || []);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingSkus(false);
+    }
+  };
+
+  const toggleSku = (sku: string) => {
+    setSelectedSkus(prev => 
+      prev.includes(sku) ? prev.filter(s => s !== sku) : [...prev, sku]
+    );
+  };
+
   const handleNegotiate = async () => {
-    if (!proveedor) {
-      setError('Por favor ingresa un proveedor objetivo.');
+    if (!proveedor || !selectedCompanyId) {
+      setError('Por favor ingresa un proveedor objetivo y asegúrate de tener una empresa activa.');
       return;
     }
     
@@ -28,7 +56,9 @@ export default function NegotiationEngine() {
         },
         body: JSON.stringify({
           proveedor,
-          macroContexto
+          macroContexto,
+          selectedSkus: selectedSkus.length > 0 ? selectedSkus : availableSkus.map(s => s.sku),
+          empresaId: selectedCompanyId
         })
       });
 
@@ -54,15 +84,49 @@ export default function NegotiationEngine() {
 
       <div className={styles.inputSection}>
         <div className={styles.inputGroup}>
-          <label>Proveedor Objetivo</label>
-          <input 
-            type="text" 
-            placeholder="Ej. ALPLA MEXICO" 
-            value={proveedor}
-            onChange={e => setProveedor(e.target.value)}
-            className={styles.input}
-          />
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <label>Proveedor Objetivo</label>
+              <input 
+                type="text" 
+                placeholder="Ej. ALPLA MEXICO" 
+                value={proveedor}
+                onChange={e => setProveedor(e.target.value)}
+                className={styles.input}
+                style={{ width: '100%', boxSizing: 'border-box' }}
+              />
+            </div>
+            <button 
+              onClick={fetchSkus} 
+              disabled={!proveedor || loadingSkus || loading}
+              className={styles.button}
+              style={{ marginTop: '23px', padding: '10px 16px', fontSize: '14px', height: '46px' }}
+            >
+              {loadingSkus ? 'Buscando...' : 'Buscar SKUs'}
+            </button>
+          </div>
         </div>
+
+        {availableSkus.length > 0 && (
+          <div className={styles.inputGroup}>
+            <label>Filtrar por SKUs Específicos (Opcional)</label>
+            <div className={styles.skuList}>
+              {availableSkus.map(s => (
+                <label key={s.sku} className={styles.skuItem}>
+                  <input 
+                    type="checkbox" 
+                    checked={selectedSkus.includes(s.sku)}
+                    onChange={() => toggleSku(s.sku)}
+                  />
+                  <span>{s.sku} - {s.desc}</span>
+                </label>
+              ))}
+            </div>
+            <span className={styles.hint}>
+              Si no seleccionas ninguno, la Inteligencia Artificial analizará todos los SKUs encontrados.
+            </span>
+          </div>
+        )}
 
         <div className={styles.inputGroup}>
           <label>Contexto Macroeconómico (Opcional)</label>

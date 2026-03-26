@@ -14,29 +14,38 @@ export async function POST(req: Request) {
     const formData = await req.formData();
     const excelFile = formData.get('excel') as File | null;
     const pdfFile = formData.get('pdf') as File | null;
+    const empresaId = formData.get('empresaId') as string | null;
+    const empresaNombre = formData.get('empresaNombre') as string | null;
 
-    if (!excelFile || !pdfFile) {
-      return NextResponse.json({ error: 'Faltan archivos' }, { status: 400 });
+    if (!excelFile || !pdfFile || !empresaId || !empresaNombre) {
+      return NextResponse.json({ error: 'Faltan archivos o contexto empresarial faltante' }, { status: 400 });
     }
 
-    // --- 1. Subida Opcional a Storage (Para Respaldo Mensual) ---
-    const monthId = new Date().toISOString().substring(0, 7); // Formato YYYY-MM
-    await supabase.storage.from('documentos_mensuales').upload(`${monthId}_compras.xlsx`, excelFile, { upsert: true });
-    await supabase.storage.from('documentos_mensuales').upload(`${monthId}_acuerdos.pdf`, pdfFile, { upsert: true });
-
-    // --- 2. TRUNCATE DB (Drop & Replace) ---
-    // Invocamos la RPC creada en el schema.sql inicial
-    const { error: rpcError } = await supabase.rpc('truncate_data_for_monthly_update');
-    if (rpcError) {
-      console.error("Error truncating:", rpcError);
-      return NextResponse.json({ error: 'Fallo al purgar la base de datos previa. ' + rpcError.message }, { status: 500 });
-    }
-
-    // --- 3. Procesamiento del Excel ---
+    // --- 0. VALIDACION DE SUBSIDIARIA OBLIGATORIA (Cero Contaminación) ---
     const buffer = Buffer.from(await excelFile.arrayBuffer());
     const workbook = xlsx.read(buffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
     const rawData = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
+
+    if (rawData.length > 0) {
+      // Find the first valid row that contains 'Subsidiaria: Nombre'
+      const sampleRow: any = rawData.find((r: any) => r['Subsidiaria: Nombre']);
+      if (sampleRow) {
+        const fileSubsidiary = (sampleRow['Subsidiaria: Nombre'] || '').trim().toLowerCase();
+        const activeCompany = (empresaNombre || '').trim().toLowerCase();
+        
+        // Match check: If strings don't overlap or match
+        if (!fileSubsidiary.includes(activeCompany) && !activeCompany.includes(fileSubsidiary)) {
+          return NextResponse.json({ 
+            error: `¡Alerta de Contaminación Cruzada! El archivo Excel pertenece a la subsidiaria "${sampleRow['Subsidiaria: Nombre']}", pero estás intentando subirlo a la empresa "${empresaNombre}". Cambia de empresa en la barra superior o sube el archivo correcto.` 
+          }, { status: 400 });
+        }
+      }
+    }
+
+    // --- 1. Subida Opcional a Storage (Para Respaldo Mensual) ---
+    const monthId = new Date().toISOString().substring(0, 7); // Formato YYYY-MM
+    await supabase.storage.from('documentos_mensuales').upload(`${monthId}_${empresaId}_compras.xlsx`, excelFile, { upsert: true });
 
     // Parseo seguro de filas al esquema de DB (compras)
     const normalizedData = rawData.map((row: any) => {
@@ -51,6 +60,7 @@ export async function POST(req: Request) {
       }
 
       return {
+        empresa_id: empresaId,
         proveedor: row['Proveedor: Nombre de la empresa'] || 'DESCONOCIDO',
         articulo_sku: row['Artículo: Nombre'] || row['Artculo: Nombre'] || 'N/A',
         descripcion_articulo: row['Artículo: Descripción (compras)'] || '',
@@ -59,7 +69,7 @@ export async function POST(req: Request) {
         importe_neto: Number(row['Importe (neto)']) || 0,
         fecha_creacion: fCreacion
       };
-    }).filter((r: any) => r.importe_neto !== 0);
+    }).filter((r: any) => r.importe_neto !== 0 || r.cantidad_recibida !== 0);
 
     // Insert en lotes de 1000 para Supabase
     const BATCH_SIZE = 1000;
@@ -104,7 +114,8 @@ INSTRUCCIONES CLAVE:
 8. "lead_time_dias": Extrae el LEAD TIME en días (ej. 30), si no, pon 0.
 9. "moneda": Extrae la MONEDA (ej. PESOS). Si es PESOS conviertelo a MXN.
 10. "fecha_inicio": Extrae la FECHA INICIO DEL PRECIO VIGENTE en formato YYYY-MM-DD. Si no existe, omite la llave.
-Devuelve EXCLUSIVAMENTE un JSON Array puro sin markdown con este schema: [{"proveedor": "string", "articulo_sku": "string", "descripcion": "string", "udm": "string", "precio_anterior": 0.0, "precio_unitario": 0.0, "variacion_porcentaje": "string", "moq": "string", "lead_time_dias": 0, "moneda": "MXN", "fecha_inicio": "2024-01-01"}]. Si no hay tablas, devuelve \`[]\`.
+11. "condiciones": Extrae los TÉRMINOS DE PAGO o MÉTODO DE PAGO y días de crédito del encabezado del documento (ej. "CRÉDITO 60 DÍAS" o "PPD").
+Devuelve EXCLUSIVAMENTE un JSON Array puro sin markdown con este schema: [{"proveedor": "string", "articulo_sku": "string", "descripcion": "string", "udm": "string", "precio_anterior": 0.0, "precio_unitario": 0.0, "variacion_porcentaje": "string", "moq": "string", "lead_time_dias": 0, "moneda": "MXN", "fecha_inicio": "2024-01-01", "condiciones": "string"}]. Si no hay tablas, devuelve \`[]\`.
 TEXTO:\n${chunkText}`;
           
           try {
@@ -136,8 +147,10 @@ TEXTO:\n${chunkText}`;
         const chunkedResults = await Promise.all(chunkPromises);
         const allAcuerdos = chunkedResults.flat().filter(a => a && a.articulo_sku && a.articulo_sku !== 'EMPTY' && a.articulo_sku !== 'null');
         
-        if (allAcuerdos.length > 0) {
-          const { error: insError } = await supabase.from('acuerdos').insert(allAcuerdos);
+        const finalAcuerdos = allAcuerdos.map(a => ({ ...a, empresa_id: empresaId }));
+
+        if (finalAcuerdos.length > 0) {
+          const { error: insError } = await supabase.from('acuerdos').insert(finalAcuerdos);
           if(insError) console.error("Error insertando Acuerdos:", insError);
         }
       }

@@ -3,17 +3,22 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import styles from './TradeAgreements.module.css';
+import { useCompany } from '@/context/CompanyContext';
 
 export default function TradeAgreements() {
+  const { selectedCompanyId } = useCompany();
   const [acuerdos, setAcuerdos] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [proveedores, setProveedores] = useState<string[]>([]);
   const [selectedProveedor, setSelectedProveedor] = useState<string>('all');
 
   useEffect(() => {
+    if (!selectedCompanyId) return;
+
     const loadAcuerdos = async () => {
-      // Pedimos hasta 2000 acuerdos sin límite forzado de 50
-      const { data } = await supabase.from('acuerdos').select('*').limit(2000);
+      setLoading(true);
+      // Pedimos hasta 5000 acuerdos sin límite forzado de 50
+      const { data } = await supabase.from('acuerdos').select('*').eq('empresa_id', selectedCompanyId).limit(5000);
       if (data) {
         setAcuerdos(data);
         const unique = Array.from(new Set(data.map(item => item.proveedor))).filter(Boolean).sort();
@@ -22,7 +27,7 @@ export default function TradeAgreements() {
       setLoading(false);
     };
     loadAcuerdos();
-  }, []);
+  }, [selectedCompanyId]);
 
   const filteredAcuerdos = selectedProveedor === 'all' 
     ? acuerdos 
