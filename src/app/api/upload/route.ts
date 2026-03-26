@@ -71,6 +71,17 @@ export async function POST(req: Request) {
       };
     }).filter((r: any) => r.importe_neto !== 0 || r.cantidad_recibida !== 0);
 
+    // --- 2. Drop & Replace: Borrar datos anteriores para evitar duplicidad ---
+    const { error: delComprasErr } = await supabase
+      .from('compras')
+      .delete()
+      .eq('empresa_id', empresaId);
+      
+    if (delComprasErr) {
+      console.error("Error deleting old compras:", delComprasErr);
+      throw new Error("Fallo al limpiar historial de compras anterior: " + delComprasErr.message);
+    }
+
     // Insert en lotes de 1000 para Supabase
     const BATCH_SIZE = 1000;
     for (let i = 0; i < normalizedData.length; i += BATCH_SIZE) {
@@ -150,6 +161,16 @@ TEXTO:\n${chunkText}`;
         const finalAcuerdos = allAcuerdos.map(a => ({ ...a, empresa_id: empresaId }));
 
         if (finalAcuerdos.length > 0) {
+          // --- Drop & Replace para Acuerdos ---
+          const { error: delAcuerdosErr } = await supabase
+            .from('acuerdos')
+            .delete()
+            .eq('empresa_id', empresaId);
+            
+          if (delAcuerdosErr) {
+            console.error("Error deleting old acuerdos:", delAcuerdosErr);
+          }
+
           const { error: insError } = await supabase.from('acuerdos').insert(finalAcuerdos);
           if(insError) console.error("Error insertando Acuerdos:", insError);
         }
