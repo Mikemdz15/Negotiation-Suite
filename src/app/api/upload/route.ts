@@ -160,6 +160,7 @@ TEXTO:\n${chunkText}`;
         
         const finalAcuerdos = allAcuerdos.map(a => ({ ...a, empresa_id: empresaId }));
 
+        let acuerdosInsertados = 0;
         if (finalAcuerdos.length > 0) {
           // --- Drop & Replace para Acuerdos ---
           const { error: delAcuerdosErr } = await supabase
@@ -172,14 +173,25 @@ TEXTO:\n${chunkText}`;
           }
 
           const { error: insError } = await supabase.from('acuerdos').insert(finalAcuerdos);
-          if(insError) console.error("Error insertando Acuerdos:", insError);
+          if (insError) {
+            console.error("Error insertando Acuerdos:", insError);
+          } else {
+            acuerdosInsertados = finalAcuerdos.length;
+          }
         }
+
+        if (acuerdosInsertados === 0) {
+          return NextResponse.json({ success: true, message: `Historial de compras guardado (${normalizedData.length} cols). SIN EMBARGO, no se detectaron Acuerdos en el PDF. Si el archivo es una imagen o documento escaneado, el sistema no puede leerlo. Sube un PDF exportado con texto nativo.` });
+        }
+
+        return NextResponse.json({ success: true, message: `Procesados ${normalizedData.length} registros y extraídos ${acuerdosInsertados} Acuerdos del PDF.` });
       }
     } catch (pdfErr) {
       console.error("No se pudo extraer el PDF con IA, omitiendo acuerdos: ", pdfErr);
+      return NextResponse.json({ success: true, message: `Historial guardado, pero falló la lectura del PDF por un error en el servidor AI.` });
     }
 
-    return NextResponse.json({ success: true, message: `Procesados ${normalizedData.length} registros y extraídos Acuerdos del PDF.` });
+    return NextResponse.json({ success: true, message: `Historial guardado, pero no se pudo leer el PDF.` });
 
   } catch (error: any) {
     console.error("Upload API error: ", error);
