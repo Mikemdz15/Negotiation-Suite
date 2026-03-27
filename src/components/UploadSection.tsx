@@ -58,8 +58,9 @@ export default function UploadSection() {
       }
 
       // Procesamiento de Chunks por Inteligencia Artificial (Bypass Vercel Timeout)
+      // Se baja el CHUNK a 12,000 caracteres para asegurar que OpenRouter termine en menos de 10s (Límite estricto de Vercel Hobby)
       const pdfText: string = uploadData.pdfText;
-      const CHUNK_SIZE = 40000;
+      const CHUNK_SIZE = 12000;
       const totalChunks = Math.ceil(pdfText.length / CHUNK_SIZE);
       let totalInserted = 0;
 
