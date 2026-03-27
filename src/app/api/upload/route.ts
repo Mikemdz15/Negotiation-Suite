@@ -3,6 +3,8 @@ import { createClient } from '@supabase/supabase-js';
 import * as xlsx from 'xlsx';
 const PDFParser = require('pdf2json');
 
+export const maxDuration = 300; // Increase Vercel function timeout to 5 minutes
+
 // Se ocupa el SERVICE_ROLE para el Drop & Replace, ya que implica bypass de politicas RLS o acceso total a DB
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL || '',
