@@ -43,13 +43,55 @@ export default function UploadSection() {
       });
 
       if (!res.ok) {
-        throw new Error('Fallo al cargar y procesar los archivos en Supabase.');
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Fallo al cargar los archivos en la nube.');
       }
 
-      setStatus('success');
-      setMsg(`¡Base de datos de ${activeCompanyName} actualizada con éxito! Refresca la página para ver cambios.`);
+      const uploadData = await res.json();
+      
+      if (!uploadData.pdfText) {
+        setStatus('success');
+        setMsg(uploadData.message || `¡Base de datos de ${activeCompanyName} actualizada con éxito!`);
+        setPdfFile(null);
+        setExcelFile(null);
+        return;
+      }
+
+      // Procesamiento de Chunks por Inteligencia Artificial (Bypass Vercel Timeout)
+      const pdfText: string = uploadData.pdfText;
+      const CHUNK_SIZE = 40000;
+      const totalChunks = Math.ceil(pdfText.length / CHUNK_SIZE);
+      let totalInserted = 0;
+
+      for (let i = 0; i < totalChunks; i++) {
+        setMsg(`Analizando Acuerdos Comerciales con IA (${i + 1}/${totalChunks})... Por favor no cierres la ventana.`);
+        const chunkText = pdfText.substring(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+
+        const chunkRes = await fetch('/api/acuerdos-chunk', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chunkText, empresaId: selectedCompanyId })
+        });
+
+        if (chunkRes.ok) {
+          const chunkData = await chunkRes.json();
+          totalInserted += (chunkData.inserted || 0);
+        } else {
+          console.error(`Error procesando chunk ${i + 1}`);
+        }
+      }
+
+      if (totalInserted === 0) {
+        setStatus('success');
+        setMsg(`Historial guardado, pero NO se encontraron Acuerdos válidos. Si el PDF es una imagen escaneada, el sistema no puede leerlo.`);
+      } else {
+        setStatus('success');
+        setMsg(`¡Éxito! Base de datos actualizada y ${totalInserted} acuerdos comerciales extraídos correctamente.`);
+      }
+
       setPdfFile(null);
       setExcelFile(null);
+
     } catch (err: any) {
       setStatus('error');
       setMsg(err.message);
