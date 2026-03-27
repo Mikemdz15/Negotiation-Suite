@@ -74,18 +74,37 @@ export async function POST(req: Request) {
     }).filter((r: any) => r.importe_neto !== 0 || r.cantidad_recibida !== 0);
 
     // --- 2. Drop & Replace: Borrar datos anteriores para evitar duplicidad ---
-    const { error: delComprasErr } = await supabase
-      .from('compras')
-      .delete()
-      .eq('empresa_id', empresaId);
+    const delComprasPromise = supabase.from('compras').delete().eq('empresa_id', empresaId);
+    const delAcuerdosPromise = supabase.from('acuerdos').delete().eq('empresa_id', empresaId);
+    
+    const [delComprasRes, delAcuerdosRes] = await Promise.all([delComprasPromise, delAcuerdosPromise]);
       
-    if (delComprasErr) {
-      console.error("Error deleting old compras:", delComprasErr);
-      throw new Error("Fallo al limpiar historial de compras anterior: " + delComprasErr.message);
+    if (delComprasRes.error) {
+      console.error("Error deleting old compras:", delComprasRes.error);
+      throw new Error("Fallo al limpiar historial de compras anterior: " + delComprasRes.error.message);
+    }
+    if (delAcuerdosRes.error) {
+      console.error("Error deleting old acuerdos:", delAcuerdosRes.error);
     }
 
-    // Insert en lotes de 1000 para Supabase
-    const BATCH_SIZE = 1000;
+    // --- 3. Iniciar el parseo del PDF en background ---
+    const pdfPromise = (async () => {
+      try {
+        const pdBuf = Buffer.from(await pdfFile.arrayBuffer());
+        return await new Promise<string>((resolve, reject) => {
+          const pdfParser = new PDFParser(null, 1);
+          pdfParser.on("pdfParser_dataError", (errData: any) => reject(errData.parserError));
+          pdfParser.on("pdfParser_dataReady", () => resolve(pdfParser.getRawTextContent()));
+          pdfParser.parseBuffer(pdBuf);
+        });
+      } catch (err) {
+        console.error("No se pudo extraer el PDF crudo:", err);
+        return '';
+      }
+    })();
+
+    // Insert en lotes masivos para Vercel (hasta 5000)
+    const BATCH_SIZE = 5000;
     for (let i = 0; i < normalizedData.length; i += BATCH_SIZE) {
       const batch = normalizedData.slice(i, i + BATCH_SIZE);
       const { error: insErr } = await supabase.from('compras').insert(batch);
@@ -95,32 +114,8 @@ export async function POST(req: Request) {
       }
     }
 
-    // --- 4. Extracción Incial del PDF (La IA se orquesta desde el Cliente) ---
-    let extractedPdfText = '';
-    try {
-      const pdfBuffer = Buffer.from(await pdfFile.arrayBuffer());
-      
-      extractedPdfText = await new Promise<string>((resolve, reject) => {
-        const pdfParser = new PDFParser(null, 1);
-        pdfParser.on("pdfParser_dataError", (errData: any) => reject(errData.parserError));
-        pdfParser.on("pdfParser_dataReady", () => resolve(pdfParser.getRawTextContent()));
-        pdfParser.parseBuffer(pdfBuffer);
-      });
-
-      // --- Drop & Replace para Acuerdos ANTES de que el cliente procese los chunks ---
-      const { error: delAcuerdosErr } = await supabase
-        .from('acuerdos')
-        .delete()
-        .eq('empresa_id', empresaId);
-        
-      if (delAcuerdosErr) {
-        console.error("Error deleting old acuerdos:", delAcuerdosErr);
-      }
-
-    } catch (pdfErr) {
-      console.error("No se pudo extraer el PDF crudo: ", pdfErr);
-      return NextResponse.json({ success: true, message: `Historial guardado, pero falló la lectura del PDF.`, pdfText: '' });
-    }
+    // --- 4. Extracción Inicial del PDF (La IA se orquesta desde el Cliente) ---
+    const extractedPdfText = await pdfPromise;
 
     return NextResponse.json({ 
       success: true, 
